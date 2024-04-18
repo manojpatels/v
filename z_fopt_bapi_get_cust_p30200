@@ -1,0 +1,798 @@
+FUNCTION z_fopt_bapi_get_cust_p30200 .
+*"----------------------------------------------------------------------
+*"*"Local Interface:
+*"  IMPORTING
+*"     VALUE(IV_KUNNR) TYPE  KUNNR DEFAULT '*'
+*"     VALUE(IV_BUKRS) TYPE  BUKRS DEFAULT '*'
+*"     VALUE(IV_FDATE) TYPE  DATUM OPTIONAL
+*"     VALUE(IV_TDATE) TYPE  DATUM OPTIONAL
+*"     VALUE(IV_REFRESH) TYPE  FLAG OPTIONAL
+*"  TABLES
+*"      ET_CUSTOMER_DATA STRUCTURE  ZZSF000004
+*"      ET_RETURN STRUCTURE  BAPIRET2 OPTIONAL
+*"----------------------------------------------------------------------
+* MODIFICATION HISTORY
+*-----------------------------------------------------------------------------*
+* 24/11/2015  JULIMAINOE MOHD NOH (D30K960068)
+*             Batch Job Enhancement (INC15385341)
+*             Search key: juli01.
+*-----------------------------------------------------------------------------*
+* 30/10/2017  CHGCHNTK (D30K987681, D30K988579)
+*             PSR03254 - Add BNM Residency Status..
+* 05/11/2018  C0019742  (D30K998622)
+*             OSR00125 - Add additional Email
+*-----------------------------------------------------------------------------*
+* 14/01/2019 C0024300  (D30K9A023W)
+*            ICT_WO002357770 - Customer Number Not updated
+*-----------------------------------------------------------------------------*
+* 01/11/2021  C0049840 (D30K9A0NV7)
+*             SR01525 - Debt Collection Tool - Adding Dunning_Level and
+*             Credit_ limit Feilds
+* T Y P E D E C L A R A T I O N S
+* 23.02.2024   C0013995   D30K9A11QE        Adding Company Registration Number
+*                         D30K9A11QF        Correcting existing codes
+*-----------------------------------------------------------------------------*
+  TYPES: BEGIN OF lty_data,
+           kunnr TYPE kna1-kunnr,
+           bukrs TYPE knb1-bukrs,
+           erdat TYPE knb1-erdat,
+           ort01 TYPE kna1-ort01,
+           pstlz TYPE kna1-pstlz,
+           regio TYPE kna1-regio,
+           stras TYPE kna1-stras,
+           land1 TYPE kna1-land1,
+           vbund TYPE kna1-vbund,
+           stcd1 TYPE kna1-stcd1,
+           adrnr TYPE kna1-adrnr,
+           ktokd TYPE kna1-ktokd,
+           zterm TYPE knb1-zterm,
+           stceg TYPE kna1-stceg,   "+D30K9A11QF
+         END OF lty_data.
+
+  TYPES: BEGIN OF lty_chng,
+           customer_no TYPE cdhdr-objectid,
+           adrnr       TYPE cdhdr-objectid,
+         END OF lty_chng.
+
+* Start of  D30K9A0NV8
+  TYPES : BEGIN OF lty_knb5,
+            mahns TYPE knb5-mahns,
+          END OF lty_knb5.
+  DATA: lt_knb5 TYPE STANDARD TABLE OF lty_knb5,
+        ls_knb5 TYPE lty_knb5.
+
+* End of  D30K9A0NV8
+
+  DATA: BEGIN OF ls_kna1,                             "(+)D30K972620
+          kunnr TYPE kna1-kunnr,
+          adrnr TYPE kna1-adrnr,
+        END OF ls_kna1.
+
+  DATA: BEGIN OF ls_cdhdr,                            "(+)D30K972620
+          objectclas TYPE cdhdr-objectclas,
+          objectid   TYPE cdhdr-objectid,
+        END OF ls_cdhdr.
+
+*-----------------------------------------------------------------------------*
+* D A T A D E C L A R A T I O N S
+*-----------------------------------------------------------------------------*
+  DATA: ls_cust_mast TYPE zzsf000004.
+  DATA: lt_cust_mast     TYPE TABLE OF zzsf000004,
+        lt_return        TYPE TABLE OF bapiret2,
+*        lt_cdhdr     TYPE TABLE OF cdhdr,
+        lt_cdhdr_tmp     TYPE TABLE OF cdhdr,       "+D30K962728
+        lt_tvzbt         TYPE TABLE OF tvzbt,
+        lt_t005u         TYPE TABLE OF t005u,
+        ls_tvzbt         TYPE tvzbt,
+        lt_chng          TYPE TABLE OF lty_chng,
+        lt_master        TYPE TABLE OF zf199,
+        lt_update        TYPE TABLE OF zf199,
+        lt_data          TYPE TABLE OF lty_data,
+        lt_data_tmp      TYPE TABLE OF lty_data,
+        lt_data_new      TYPE TABLE OF lty_data,
+        lt_cust_mast_tmp TYPE TABLE OF zzsf000004,
+        lt_adr6          TYPE gty_adr6_tab,
+*        lt_adr6      TYPE TABLE OF adr6,
+        lt_adrc          TYPE TABLE OF adrc,
+        lt_zf234         TYPE TABLE OF zf234.
+
+  DATA: ls_chng   TYPE lty_chng,
+*        ls_cdhdr  TYPE cdhdr,
+        ls_master TYPE zf199,
+        ls_adrc   TYPE adrc,
+        ls_adr6   TYPE adr6,
+        ls_t005u  TYPE t005u,
+        ls_zf234  TYPE zf234,
+        ls_data   TYPE lty_data.
+
+  DATA: ls_return TYPE bapiret2.
+  DATA: lv_file   TYPE catfilnam.
+  DATA: lv_dest   TYPE rfcdest.
+  DATA: lt_zf197  TYPE TABLE OF zf197.
+  DATA: ls_zf197  TYPE zf197.
+  DATA: ls_zf196  TYPE zf196.
+  DATA: lv_date   TYPE sy-datum.
+  DATA: lv_bezei  TYPE bezei20.
+  DATA: lv_name2  TYPE char04.
+
+  DATA: lt_cdhdr_temp LIKE STANDARD TABLE OF ls_cdhdr.      "(+)D30K972620
+  DATA: lt_cdhdr      LIKE STANDARD TABLE OF ls_cdhdr.      "(+)D30K972620
+  DATA: lt_kna1       LIKE STANDARD TABLE OF ls_kna1.       "(+)D30K972620
+
+  DATA: lv_mahns TYPE  mahns.            " D30K9A0NV8
+  DATA: lv_kkber TYPE kkber.             " D30K9A0NV8
+  DATA: lv_klimk TYPE klimk.             " D30K9A0NV8
+
+  RANGES: rg_udate   FOR sy-datum.                          "juli01
+* begin insert D30K987681
+  TYPES: BEGIN OF lty_bnm,
+           kunnr  TYPE kna1-kunnr,
+           zbnmst TYPE kna1-zbnmst,
+         END OF lty_bnm.
+  DATA: lt_bnm TYPE STANDARD TABLE OF lty_bnm,
+        ls_bnm TYPE lty_bnm.
+
+* end insert D30K987681
+
+*-----------------------------------------------------------------------------*
+* C O N S T A N T S
+*-----------------------------------------------------------------------------*
+  CONSTANTS: lc_func TYPE rs38l_fnam VALUE 'Z_FOPT_BAPI_GET_CUST_P50200'.
+  CONSTANTS: lc_x    TYPE c VALUE 'X'.
+
+*-----------------------------------------------------------------------------*
+* I N I T I A L I Z A T I O N
+*-----------------------------------------------------------------------------*
+  CLEAR: ls_cust_mast, ls_return, lv_date, ls_zf197, ls_zf196, lv_date, lv_bezei, rg_udate.
+  REFRESH: lt_master[], lt_cust_mast[], lt_data[], lt_zf197[], lt_tvzbt[], lt_t005u[].
+  REFRESH: rg_udate[], lt_data_tmp[], lt_data_new[].
+* begin insert D30K987681
+  REFRESH: lt_bnm[].
+* end insert D30K987681
+*>>Insert Begin D30K9A11QF
+  CONSTANTS: lc_dteam_gfcd TYPE zcc_dteam VALUE 'GFCD',          "GFC Dubai Hub Team
+             lc_bukrs      TYPE zcc_vtype VALUE 'BUKRS'.          "Company Code
+  DATA: lr_bukrs TYPE RANGE OF t001-bukrs.                       "Company code
+  DATA: ls_bukrs LIKE LINE OF lr_bukrs.                          "Company Code
+  DATA: lv_key TYPE string.
+  DATA: lv_autocalc TYPE boolean.
+
+*get Variables from table ZCC_VAR
+  SELECT * INTO TABLE @DATA(lt_zcc_var)
+         FROM zcc_var
+         WHERE dteam = @lc_dteam_gfcd
+         AND   vtype = @lc_bukrs.
+  REFRESH: lr_bukrs.
+  LOOP AT lt_zcc_var INTO DATA(ls_zcc_var).
+    CLEAR: ls_bukrs.
+    ls_bukrs-sign = ls_zcc_var-valsign.
+    ls_bukrs-option = ls_zcc_var-valoption.
+    ls_bukrs-low    = ls_zcc_var-valfrom.
+    ls_bukrs-high   = ls_zcc_var-valto.
+
+    APPEND ls_bukrs TO lr_bukrs.
+  ENDLOOP.
+*<<Insert End D30K9A11QF
+
+*-----------------------------------------------------------------------------*
+* G E T
+*-----------------------------------------------------------------------------*
+  REPLACE ALL OCCURRENCES OF '*' IN iv_kunnr WITH '%'.
+  REPLACE ALL OCCURRENCES OF '*' IN iv_bukrs WITH '%'.
+
+**start of juli01:set range date if From/To date not empty.
+  IF iv_fdate IS NOT INITIAL OR iv_tdate IS NOT INITIAL.
+    rg_udate-sign   = 'I'.
+    rg_udate-low    = iv_fdate.
+    IF iv_tdate IS INITIAL.
+      rg_udate-option = 'EQ'.
+    ELSE.
+      rg_udate-option = 'BT'.
+      rg_udate-high   = iv_tdate.
+    ENDIF.
+    APPEND rg_udate.
+  ENDIF.
+**end of juli01:set range date if From/To date not empty.
+
+  SELECT * FROM zf234
+    INTO TABLE lt_zf234.
+
+  IF iv_refresh IS INITIAL AND rg_udate[] IS INITIAL.   "juli01  D30K961813
+    SELECT SINGLE last_sent_date                        "#EC CI_NOFIELD
+      FROM zf196
+      INTO lv_date
+     WHERE master EQ 'CUSTOMER_MAST'.
+
+    SELECT * FROM zf199
+      INTO TABLE lt_master.
+    IF sy-subrc IS INITIAL.
+      SORT lt_master.
+    ENDIF.
+  ENDIF.                                                    "juli01
+
+* Begin of insertion D30K976945
+  IF iv_kunnr IS NOT INITIAL AND iv_kunnr NE '%'.           "D30K978627
+    CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+      EXPORTING
+        input  = iv_kunnr
+      IMPORTING
+        output = iv_kunnr.
+
+    SELECT SINGLE kunnr adrnr FROM kna1
+      INTO ls_kna1 WHERE kunnr EQ iv_kunnr.
+    IF sy-subrc EQ 0.
+      SELECT objectclas objectid FROM cdhdr
+           INTO TABLE lt_cdhdr_temp
+           WHERE objectclas IN ('KRED', 'ADRESSE', 'DEBI')
+             AND objectid EQ ls_kna1-kunnr
+             AND udate BETWEEN iv_fdate AND iv_tdate
+*             AND tcode IN ('XD02', 'XD01', 'FD02')        "(-)ICT_WO002357770-D30K9A023W
+             AND tcode IN ('XD02', 'XD01', 'FD02', 'XD03') "(+)ICT_WO002357770-D30K9A023W
+             AND change_ind EQ 'U'
+             AND langu EQ sy-langu.
+      IF lt_cdhdr_temp[] IS NOT INITIAL.
+        SORT lt_cdhdr_temp BY objectid.
+        DELETE ADJACENT DUPLICATES FROM lt_cdhdr_temp COMPARING objectid.
+
+        lt_cdhdr[] = lt_cdhdr_temp[].
+        DELETE lt_cdhdr      WHERE objectclas NE 'ADRESSE'.
+        DELETE lt_cdhdr_temp WHERE objectclas EQ 'ADRESSE'.
+      ENDIF.
+    ENDIF.
+  ELSE.
+* End of insertion D30K976945
+
+    "Build CDHDR reference table
+    SELECT objectclas objectid FROM cdhdr
+      INTO TABLE lt_cdhdr_temp
+      WHERE objectclas IN ('KRED', 'ADRESSE', 'DEBI')
+        AND udate BETWEEN iv_fdate AND iv_tdate
+*        AND tcode IN ('XD02', 'XD01', 'FD02')        "(-)ICT_WO002357770-D30K9A023W
+        AND tcode IN ('XD02', 'XD01', 'FD02','XD03')  "(+)ICT_WO002357770-D30K9A023W
+        AND change_ind EQ 'U'
+        AND langu EQ sy-langu.
+    IF lt_cdhdr_temp[] IS NOT INITIAL.
+      SORT lt_cdhdr_temp BY objectid.
+      DELETE ADJACENT DUPLICATES FROM lt_cdhdr_temp COMPARING objectid.
+
+      lt_cdhdr[] = lt_cdhdr_temp[].
+      DELETE lt_cdhdr      WHERE objectclas NE 'ADRESSE'.
+      DELETE lt_cdhdr_temp WHERE objectclas EQ 'ADRESSE'.
+    ENDIF.
+  ENDIF.
+
+
+  IF iv_refresh IS INITIAL AND rg_udate[] IS NOT INITIAL.
+    SELECT kna1~kunnr
+           knb1~bukrs
+           kna1~erdat
+           kna1~ort01
+           kna1~pstlz
+           kna1~regio
+           kna1~stras
+           kna1~land1
+           kna1~vbund
+           kna1~stcd1
+           kna1~adrnr
+           kna1~ktokd
+           knb1~zterm
+           kna1~stceg   "+D30K9A11QF
+      FROM kna1
+      INNER JOIN knb1
+      ON kna1~kunnr EQ knb1~kunnr
+      INTO TABLE lt_data_new
+      WHERE kna1~kunnr LIKE iv_kunnr
+        AND knb1~bukrs LIKE iv_bukrs
+        AND knb1~erdat IN rg_udate              "+D30K962852
+        AND knb1~loevm EQ space
+        AND knb1~nodel EQ space.
+    IF lt_data_new[] IS NOT INITIAL.
+      lt_data[] = lt_data_new[].
+    ENDIF.
+
+    IF lt_cdhdr[] IS NOT INITIAL.                      "(+)D30K976038
+      SELECT kunnr adrnr                                "#EC CI_NOFIELD
+        FROM kna1
+        INTO TABLE lt_kna1
+        FOR ALL ENTRIES IN lt_cdhdr
+        WHERE adrnr EQ lt_cdhdr-objectid+4(10).
+      IF sy-subrc EQ 0.
+        SORT lt_kna1 BY kunnr.
+        LOOP AT lt_kna1 INTO ls_kna1.
+          ls_cdhdr-objectclas = 'ADRESSE'.
+          ls_cdhdr-objectid   = ls_kna1-kunnr.
+          APPEND ls_cdhdr TO lt_cdhdr_temp.
+          CLEAR ls_cdhdr.
+        ENDLOOP.
+      ENDIF.
+    ENDIF.
+
+    SORT lt_cdhdr_temp BY objectid.
+    DELETE ADJACENT DUPLICATES FROM lt_cdhdr_temp COMPARING objectid.
+
+    IF lt_cdhdr_temp[] IS NOT INITIAL.
+* Get all the customers from the database
+      SELECT kna1~kunnr
+             knb1~bukrs
+             kna1~erdat
+             kna1~ort01
+             kna1~pstlz
+             kna1~regio
+             kna1~stras
+             kna1~land1
+             kna1~vbund
+             kna1~stcd1
+             kna1~adrnr
+             kna1~ktokd
+             knb1~zterm
+             kna1~stceg   "+D30K9A11QF
+        FROM kna1
+        INNER JOIN knb1
+        ON kna1~kunnr EQ knb1~kunnr
+        INTO TABLE lt_data_tmp
+        FOR ALL ENTRIES IN lt_cdhdr_temp
+        WHERE kna1~kunnr EQ lt_cdhdr_temp-objectid+0(10)
+          AND knb1~bukrs LIKE iv_bukrs
+          AND knb1~loevm EQ space
+          AND knb1~nodel EQ space.
+      IF lt_data_tmp[] IS NOT INITIAL.
+        DELETE lt_data_tmp WHERE erdat IN rg_udate. " Customer modified on given dates
+      ENDIF.
+    ENDIF.
+
+    LOOP AT lt_cdhdr_temp INTO ls_cdhdr.
+      LOOP AT lt_data_tmp INTO ls_data WHERE kunnr EQ ls_cdhdr-objectid+0(10).
+        APPEND ls_data TO lt_data.
+        CLEAR: ls_data.
+      ENDLOOP.
+    ENDLOOP.
+
+  ELSEIF iv_refresh IS INITIAL AND rg_udate[] IS INITIAL.
+    SELECT kna1~kunnr
+           knb1~bukrs
+           kna1~erdat
+           kna1~ort01
+           kna1~pstlz
+           kna1~regio
+           kna1~stras
+           kna1~land1
+           kna1~vbund
+           kna1~stcd1
+           kna1~adrnr
+           kna1~ktokd
+           knb1~zterm
+           kna1~stceg   "+D30K9A11QF
+      FROM kna1
+      INNER JOIN knb1
+      ON kna1~kunnr EQ knb1~kunnr
+      INTO TABLE lt_data
+      WHERE kna1~kunnr LIKE iv_kunnr
+        AND knb1~bukrs LIKE iv_bukrs
+        AND knb1~erdat EQ sy-datum
+        AND knb1~loevm EQ space
+        AND knb1~nodel EQ space.
+  ELSEIF iv_refresh IS NOT INITIAL AND rg_udate[] IS INITIAL.
+    SELECT kna1~kunnr
+           knb1~bukrs
+           kna1~erdat
+           kna1~ort01
+           kna1~pstlz
+           kna1~regio
+           kna1~stras
+           kna1~land1
+           kna1~vbund
+           kna1~stcd1
+           kna1~adrnr
+           kna1~ktokd
+           knb1~zterm
+           kna1~stceg   "+D30K9A11QF
+      FROM kna1
+      INNER JOIN knb1
+      ON kna1~kunnr EQ knb1~kunnr
+      INTO TABLE lt_data
+      WHERE kna1~kunnr LIKE iv_kunnr
+        AND knb1~bukrs LIKE iv_bukrs
+        AND knb1~loevm EQ space
+        AND knb1~nodel EQ space.
+  ENDIF.                                                    "juli01
+
+  IF lt_data[] IS NOT INITIAL.
+    REFRESH: lt_adrc[], lt_adr6[].
+    SELECT * FROM adrc
+             INTO TABLE lt_adrc
+             FOR ALL ENTRIES IN lt_data
+             WHERE addrnumber EQ lt_data-adrnr.
+    IF lt_adrc[] IS NOT INITIAL.
+      SORT lt_adrc BY addrnumber.
+
+      SELECT a~addrnumber a~consnumber a~flgdefault a~smtp_addr b~remark  FROM adr6 AS a
+        LEFT OUTER JOIN adrt AS b
+        ON a~addrnumber = b~addrnumber
+        AND a~persnumber = b~persnumber
+        AND a~consnumber = b~consnumber
+               INTO TABLE lt_adr6
+               FOR ALL ENTRIES IN lt_data
+               WHERE a~addrnumber EQ lt_data-adrnr
+                 AND a~persnumber EQ space.
+*                 AND FLGDEFAULT EQ LC_X
+*                 AND HOME_FLAG  EQ LC_X.
+      IF sy-subrc IS INITIAL.
+        SORT lt_adr6 BY addrnumber flgdefault.              "D30K998622
+      ENDIF.
+
+*   Region description
+      SELECT * FROM t005u
+        INTO TABLE lt_t005u
+        FOR ALL ENTRIES IN lt_adrc
+        WHERE spras EQ sy-langu
+          AND land1 EQ lt_adrc-country
+          AND bland EQ lt_adrc-region.
+      IF sy-subrc EQ 0.
+        SORT lt_t005u BY land1 bland.
+      ENDIF.
+    ENDIF.
+
+    SELECT *
+      FROM tvzbt
+      INTO TABLE lt_tvzbt
+      FOR ALL ENTRIES IN lt_data
+      WHERE spras EQ sy-langu
+        AND zterm EQ lt_data-zterm.
+    IF lt_tvzbt[] IS NOT INITIAL.
+      SORT lt_tvzbt BY zterm.
+    ENDIF.
+* begin insert D30K988579
+    SELECT kunnr zbnmst
+      FROM kna1
+      INTO TABLE lt_bnm
+      FOR ALL ENTRIES IN lt_data
+      WHERE kunnr = lt_data-kunnr.
+    SORT lt_bnm BY kunnr.
+* end insert D30K988579
+  ENDIF.
+  IF lt_master[] IS INITIAL.
+
+    LOOP AT lt_data INTO ls_data.
+      CLEAR: ls_adr6, ls_adrc, ls_zf234, lv_name2.
+
+*      READ TABLE lt_adr6 INTO ls_adr6 WITH KEY addrnumber = ls_data-adrnr
+*                                      BINARY SEARCH. "D30K998622 commented
+
+*     Begin of insertion D30K976552
+*     Convert customer id to SAP internal format
+      CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+        EXPORTING
+          input  = ls_data-kunnr
+        IMPORTING
+          output = ls_cust_mast-customer_no.
+*     End of insertion D30K976552
+
+      ls_cust_mast-comp_code       = ls_data-bukrs.
+      ls_cust_mast-cust_gst_reg_no = ls_data-stcd1.
+      ls_cust_mast-cust_reg_no     = ls_data-stceg.   "+D30K9A11QF
+      ls_cust_mast-trading_partner = ls_data-vbund.
+      ls_cust_mast-customer_group  = ls_data-ktokd.
+
+      READ TABLE lt_adrc INTO ls_adrc WITH KEY addrnumber = ls_data-adrnr BINARY SEARCH.
+      IF sy-subrc IS INITIAL.
+        IF ls_adrc-name2 IS NOT INITIAL.                    "D30K972620
+          LOOP AT lt_zf234 INTO ls_zf234.
+            IF ls_adrc-name2 CS ls_zf234-name2.
+              CONCATENATE ls_adrc-name1 ls_adrc-name2 INTO ls_cust_mast-customer_name SEPARATED BY ' '.
+            ENDIF.
+          ENDLOOP.
+          IF ls_cust_mast-customer_name IS INITIAL.
+            ls_cust_mast-customer_name = ls_adrc-name1.
+          ENDIF.
+        ELSE.
+          ls_cust_mast-customer_name = ls_adrc-name1.
+        ENDIF.
+
+        ls_cust_mast-city           = ls_adrc-city1.
+        ls_cust_mast-search_term1   = ls_adrc-sort1.
+        ls_cust_mast-postal_code    = ls_adrc-post_code1.
+        ls_cust_mast-region         = ls_adrc-region.
+        ls_cust_mast-country_key    = ls_adrc-country.
+        ls_cust_mast-cust_address_1 = ls_adrc-str_suppl1.
+        ls_cust_mast-cust_address_2 = ls_adrc-str_suppl2.
+        ls_cust_mast-cust_address_3 = ls_adrc-street.
+        ls_cust_mast-cust_address_4 = ls_adrc-str_suppl3.
+        ls_cust_mast-cust_address_5 = ls_adrc-location.
+
+        READ TABLE lt_t005u INTO ls_t005u WITH KEY land1 = ls_adrc-country
+                                                   bland = ls_adrc-region BINARY SEARCH.
+        IF sy-subrc EQ 0.
+          lv_bezei = ls_t005u-bezei.
+        ENDIF.
+
+        IF ls_adrc-city1      IS NOT INITIAL AND
+           ls_adrc-region     IS NOT INITIAL AND
+           ls_adrc-post_code1 IS NOT INITIAL.
+          IF ls_adrc-country NE 'MY'.
+            CONCATENATE ls_adrc-city1 lv_bezei ls_adrc-post_code1 INTO ls_cust_mast-cust_address_6 SEPARATED BY ','.
+          ELSE.
+            CONCATENATE ls_adrc-post_code1 ls_adrc-city1 lv_bezei INTO ls_cust_mast-cust_address_6 SEPARATED BY ','.
+          ENDIF.
+        ELSEIF ls_adrc-city1 IS NOT INITIAL AND ls_adrc-region IS NOT INITIAL
+                                            AND ls_adrc-post_code1 IS INITIAL.
+          CONCATENATE ls_adrc-city1 lv_bezei INTO ls_cust_mast-cust_address_6 SEPARATED BY ','.
+        ELSEIF ls_adrc-city1 IS NOT INITIAL AND ls_adrc-post_code1 IS NOT INITIAL
+                                            AND ls_adrc-region IS INITIAL.
+          IF ls_adrc-country NE 'MY'.
+            CONCATENATE ls_adrc-city1 ls_adrc-post_code1 INTO ls_cust_mast-cust_address_6 SEPARATED BY ','.
+          ELSE.
+            CONCATENATE ls_adrc-post_code1 ls_adrc-city1 INTO ls_cust_mast-cust_address_6 SEPARATED BY ','.
+          ENDIF.
+        ELSEIF ls_adrc-region IS NOT INITIAL AND ls_adrc-post_code1 IS NOT INITIAL
+                                             AND ls_adrc-city1 IS INITIAL.
+          IF ls_adrc-country NE 'MY'.
+            CONCATENATE lv_bezei ls_adrc-post_code1 INTO ls_cust_mast-cust_address_6 SEPARATED BY ','.
+          ELSE.
+            CONCATENATE ls_adrc-post_code1 lv_bezei INTO ls_cust_mast-cust_address_6 SEPARATED BY ','.
+          ENDIF.
+        ELSEIF ls_adrc-city1 IS NOT INITIAL AND ls_adrc-post_code1 IS INITIAL
+                                            AND ls_adrc-region IS INITIAL.
+          ls_cust_mast-cust_address_6 = ls_adrc-city1.
+        ELSEIF ls_adrc-region IS NOT INITIAL AND ls_adrc-post_code1 IS INITIAL
+                                             AND ls_adrc-city1 IS INITIAL.
+          ls_cust_mast-cust_address_6 = lv_bezei.
+        ELSE.
+          ls_cust_mast-cust_address_6 = ls_adrc-post_code1.
+        ENDIF.
+      ELSE.
+        ls_cust_mast-city           = ls_data-ort01.
+        ls_cust_mast-postal_code    = ls_data-pstlz.
+        ls_cust_mast-region         = ls_data-regio.
+        ls_cust_mast-country_key    = ls_data-land1.
+        ls_cust_mast-cust_address_3 = ls_data-stras.
+      ENDIF.
+
+*      LS_CUST_MAST-EMAIL    = LS_ADR6-SMTP_ADDR."D30K998622 Commented
+      PERFORM get_cust_email USING    ls_data-adrnr lt_adr6
+                             CHANGING ls_cust_mast-email ls_cust_mast-trade_email ls_cust_mast-non_trade_email."D30K998622 Added for geting Email
+
+      ls_cust_mast-pay_term = ls_data-zterm.
+      READ TABLE lt_tvzbt INTO ls_tvzbt WITH KEY zterm = ls_data-zterm BINARY SEARCH.
+      IF sy-subrc EQ 0.
+        ls_cust_mast-pay_desc = ls_tvzbt-vtext.
+      ENDIF.
+
+*     Country Description
+      SELECT SINGLE landx50
+        FROM t005t
+        INTO ls_cust_mast-country_desc
+        WHERE spras EQ sy-langu
+          AND land1 EQ ls_cust_mast-country_key.
+
+      REPLACE ALL OCCURRENCES OF '"' IN ls_cust_mast-customer_name WITH ' '.
+      CONDENSE ls_cust_mast-customer_name.
+*      REPLACE ALL OCCURRENCES OF ';' IN ls_cust_mast WITH ','.
+      REPLACE ALL OCCURRENCES OF ',' IN ls_cust_mast-city WITH ' '.
+      REPLACE ALL OCCURRENCES OF ',' IN ls_cust_mast-street WITH ' '.
+      REPLACE ALL OCCURRENCES OF ',' IN ls_cust_mast-trade_email WITH ';'.
+      REPLACE ALL OCCURRENCES OF ',' IN ls_cust_mast-non_trade_email WITH ';'.
+* Begin of Insert C0049840 (D30K9A0NV7)
+      READ TABLE lt_bnm INTO ls_bnm WITH KEY kunnr = ls_cust_mast-customer_no
+                                             BINARY SEARCH.
+      IF sy-subrc = 0.
+        ls_cust_mast-zbnmst = ls_bnm-zbnmst.
+      ENDIF.
+* End Insert C0049840 (D30K9A0NV7)
+* Begin of Insert C0049840 D30K9A0NV8
+      IF ls_cust_mast-customer_no
+          IS NOT INITIAL AND
+         ls_cust_mast-comp_code
+          IS NOT INITIAL.
+        SELECT SINGLE mahns
+               FROM knb5 INTO lv_mahns WHERE kunnr = ls_cust_mast-customer_no
+                                                AND bukrs = ls_cust_mast-comp_code.
+        IF sy-subrc = 0.
+          ls_cust_mast-dunning_level = lv_mahns.
+        ENDIF.
+
+        SELECT SINGLE kkber FROM t001 INTO lv_kkber
+          WHERE bukrs = ls_cust_mast-comp_code.
+        IF sy-subrc = 0.
+
+          SELECT SINGLE klimk FROM knkk INTO lv_klimk
+              WHERE kunnr = ls_cust_mast-customer_no
+                AND kkber = lv_kkber.
+          IF sy-subrc = 0 .
+            ls_cust_mast-credit_limit = lv_klimk.
+            CONDENSE ls_cust_mast-credit_limit.
+          ELSE.
+            CLEAR ls_cust_mast-credit_limit.
+          ENDIF.
+        ENDIF.
+      ENDIF.
+
+* End of D30K9A0NV8
+
+      APPEND ls_cust_mast TO et_customer_data.
+      MOVE-CORRESPONDING ls_cust_mast TO ls_master.
+      APPEND ls_master TO lt_update.
+
+      CLEAR: ls_cust_mast, ls_master, lv_bezei, ls_t005u.
+    ENDLOOP.
+
+  ELSE.
+
+    LOOP AT lt_data INTO ls_data.
+      CLEAR: ls_adr6, ls_adrc.
+
+*      READ TABLE lt_adr6 INTO ls_adr6 WITH KEY addrnumber = ls_data-adrnr BINARY SEARCH."D30K998622 Commented
+
+*     Begin of insertion D30K976552
+*     Convert customer id to SAP internal format
+      CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+        EXPORTING
+          input  = ls_data-kunnr
+        IMPORTING
+          output = ls_cust_mast-customer_no.
+*     End of insertion D30K976552
+
+      ls_cust_mast-comp_code       = ls_data-bukrs.
+      ls_cust_mast-cust_gst_reg_no = ls_data-stcd1.
+      ls_cust_mast-trading_partner = ls_data-vbund.
+      ls_cust_mast-customer_group  = ls_data-ktokd.
+
+      READ TABLE lt_adrc INTO ls_adrc WITH KEY addrnumber = ls_data-adrnr BINARY SEARCH.
+      IF sy-subrc IS INITIAL.
+        IF ls_adrc-name2 IS NOT INITIAL.
+          LOOP AT lt_zf234 INTO ls_zf234.
+            IF ls_adrc-name2 CS ls_zf234-name2.
+              CONCATENATE ls_adrc-name1 ls_adrc-name2 INTO ls_cust_mast-customer_name SEPARATED BY ' '.
+            ENDIF.
+          ENDLOOP.
+          IF ls_cust_mast-customer_name IS INITIAL.
+            ls_cust_mast-customer_name = ls_adrc-name1.
+          ENDIF.
+        ELSE.
+          ls_cust_mast-customer_name = ls_adrc-name1.
+        ENDIF.
+
+        ls_cust_mast-city           = ls_adrc-city1.
+        ls_cust_mast-search_term1   = ls_adrc-sort1.
+        ls_cust_mast-postal_code    = ls_adrc-post_code1.
+        ls_cust_mast-region         = ls_adrc-region.
+        ls_cust_mast-country_key    = ls_adrc-country.
+        ls_cust_mast-cust_address_1 = ls_adrc-str_suppl1.
+        ls_cust_mast-cust_address_2 = ls_adrc-str_suppl2.
+        ls_cust_mast-cust_address_3 = ls_adrc-street.
+        ls_cust_mast-cust_address_4 = ls_adrc-str_suppl3.
+        ls_cust_mast-cust_address_5 = ls_adrc-location.
+
+        READ TABLE lt_t005u INTO ls_t005u WITH KEY land1 = ls_adrc-country
+                                                   bland = ls_adrc-region BINARY SEARCH.
+        IF sy-subrc EQ 0.
+          lv_bezei = ls_t005u-bezei.
+        ENDIF.
+
+        IF ls_adrc-city1      IS NOT INITIAL AND
+           ls_adrc-region     IS NOT INITIAL AND
+           ls_adrc-post_code1 IS NOT INITIAL.
+          IF ls_adrc-country NE 'MY'.
+            CONCATENATE ls_adrc-city1 lv_bezei ls_adrc-post_code1 INTO ls_cust_mast-cust_address_6 SEPARATED BY ','.
+          ELSE.
+            CONCATENATE ls_adrc-post_code1 ls_adrc-city1 lv_bezei INTO ls_cust_mast-cust_address_6 SEPARATED BY ','.
+          ENDIF.
+        ELSEIF ls_adrc-city1 IS NOT INITIAL AND ls_adrc-region IS NOT INITIAL
+                                            AND ls_adrc-post_code1 IS INITIAL.
+          CONCATENATE ls_adrc-city1 lv_bezei INTO ls_cust_mast-cust_address_6 SEPARATED BY ','.
+        ELSEIF ls_adrc-city1 IS NOT INITIAL AND ls_adrc-post_code1 IS NOT INITIAL
+                                            AND ls_adrc-region IS INITIAL.
+          IF ls_adrc-country NE 'MY'.
+            CONCATENATE ls_adrc-city1 ls_adrc-post_code1 INTO ls_cust_mast-cust_address_6 SEPARATED BY ','.
+          ELSE.
+            CONCATENATE ls_adrc-post_code1 ls_adrc-city1 INTO ls_cust_mast-cust_address_6 SEPARATED BY ','.
+          ENDIF.
+        ELSEIF ls_adrc-region IS NOT INITIAL AND ls_adrc-post_code1 IS NOT INITIAL
+                                             AND ls_adrc-city1 IS INITIAL.
+          IF ls_adrc-country NE 'MY'.
+            CONCATENATE lv_bezei ls_adrc-post_code1 INTO ls_cust_mast-cust_address_6 SEPARATED BY ','.
+          ELSE.
+            CONCATENATE ls_adrc-post_code1 lv_bezei INTO ls_cust_mast-cust_address_6 SEPARATED BY ','.
+          ENDIF.
+        ELSEIF ls_adrc-city1 IS NOT INITIAL AND ls_adrc-post_code1 IS INITIAL
+                                            AND ls_adrc-region IS INITIAL.
+          ls_cust_mast-cust_address_6 = ls_adrc-city1.
+        ELSEIF ls_adrc-region IS NOT INITIAL AND ls_adrc-post_code1 IS INITIAL
+                                             AND ls_adrc-city1 IS INITIAL.
+          ls_cust_mast-cust_address_6 = lv_bezei.
+        ELSE.
+          ls_cust_mast-cust_address_6 = ls_adrc-post_code1.
+        ENDIF.
+      ELSE.
+        ls_cust_mast-city           = ls_data-ort01.
+        ls_cust_mast-postal_code    = ls_data-pstlz.
+        ls_cust_mast-region         = ls_data-regio.
+        ls_cust_mast-country_key    = ls_data-land1.
+        ls_cust_mast-cust_address_3 = ls_data-stras.
+      ENDIF.
+
+*      ls_cust_mast-email         = ls_adr6-smtp_addr."D30K998622 commented
+      PERFORM get_cust_email "TABLES   lt_adr6
+                             USING    ls_data-adrnr lt_adr6
+                             CHANGING ls_cust_mast-email ls_cust_mast-trade_email ls_cust_mast-non_trade_email."D30K998622 Added for geting Email
+      ls_cust_mast-pay_term      = ls_data-zterm.
+      READ TABLE lt_tvzbt INTO ls_tvzbt WITH KEY zterm = ls_data-zterm BINARY SEARCH.
+      IF sy-subrc EQ 0.
+        ls_cust_mast-pay_desc = ls_tvzbt-vtext.
+      ENDIF.
+
+*     Country Description
+      SELECT SINGLE landx50
+        FROM t005t
+        INTO ls_cust_mast-country_desc
+        WHERE spras EQ sy-langu
+          AND land1 EQ ls_cust_mast-country_key.
+
+      REPLACE ALL OCCURRENCES OF '"' IN ls_cust_mast-customer_name WITH ' '.
+      CONDENSE ls_cust_mast-customer_name.
+
+      READ TABLE lt_master INTO ls_master WITH KEY customer_no   = ls_data-kunnr
+                                                   comp_code     = ls_data-bukrs
+                                                   BINARY SEARCH.
+      IF sy-subrc IS NOT INITIAL.
+* begin insert D30K987681
+        READ TABLE lt_bnm INTO ls_bnm WITH KEY kunnr = ls_cust_mast-customer_no
+                                               BINARY SEARCH.
+        IF sy-subrc = 0.
+          ls_cust_mast-zbnmst = ls_bnm-zbnmst.
+        ENDIF.
+* end insert D30K987681
+        APPEND ls_cust_mast TO et_customer_data.
+
+        MOVE-CORRESPONDING ls_cust_mast TO ls_master.
+        APPEND ls_master TO lt_update.
+      ELSE.
+        APPEND ls_cust_mast TO lt_cust_mast.
+        ls_chng-customer_no  =  ls_cust_mast-customer_no.
+        CONCATENATE 'BP' ls_data-adrnr INTO ls_chng-adrnr SEPARATED BY '  '.
+        APPEND ls_chng TO lt_chng.
+      ENDIF.
+
+      CLEAR: ls_cust_mast, ls_chng, lv_bezei, ls_t005u.
+    ENDLOOP.
+  ENDIF.
+
+** RFC Destinations
+  SELECT * FROM zf197 INTO TABLE lt_zf197
+    WHERE src_sysid EQ sy-sysid.
+
+  LOOP AT lt_zf197 INTO ls_zf197.
+    CLEAR: lv_dest.
+    lv_dest = ls_zf197-rfc_destination.
+    CALL FUNCTION lc_func DESTINATION lv_dest
+      EXPORTING
+        iv_kunnr         = iv_kunnr
+        iv_bukrs         = iv_bukrs
+        iv_fdate         = iv_fdate
+        iv_tdate         = iv_tdate
+        iv_refresh       = iv_refresh
+      TABLES
+        et_return        = lt_return
+        et_customer_data = lt_cust_mast_tmp.
+
+    APPEND LINES OF lt_cust_mast_tmp TO et_customer_data.
+    REFRESH: lt_cust_mast_tmp[], lt_return[].
+  ENDLOOP.
+
+  SORT et_customer_data BY customer_no comp_code.
+  DELETE ADJACENT DUPLICATES FROM et_customer_data COMPARING ALL FIELDS.
+
+  IF et_customer_data[] IS INITIAL.
+    ls_return-type = 'E'.
+    ls_return-message = TEXT-006.
+    APPEND ls_return TO et_return.
+  ENDIF.
+
+  ls_zf196-master = 'CUSTOMER_MAST'.
+  ls_zf196-last_sent_date = sy-datum.
+  MODIFY zf196 FROM ls_zf196.
+
+  IF lt_update[] IS NOT INITIAL.
+    MODIFY zf199 FROM TABLE lt_update.
+  ENDIF.
+
+ENDFUNCTION.
